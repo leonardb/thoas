@@ -95,7 +95,7 @@ non_recursive_object_loop([{Key, Value} | Tail], Escape) ->
 %%%%
 
 encode(Value, Opts) ->
-    value(Value, escape_function(Opts)).
+    value(Value, escape_function(Opts), encoders(Opts)).
 
 encode_atom(null, _Escape) -> <<"null">>;
 encode_atom(true, _Escape) -> <<"true">>;
@@ -152,6 +152,16 @@ escape_function(Options) ->
         unicode -> fun escape_unicode/3;
         javascript -> fun escape_js/3
     end.
+
+encoders(Options) ->
+    Defaults = [{date, {date_time, date}}, {datetime, {date_time, datetime}}],
+    Encoders0 = maps:get(encoders, Options, #{}),
+    lists:foldl(
+        fun({K, _V}, Acc) when is_map_key(K, Acc) ->
+              Acc;
+           ({K, V}, Acc) ->
+              Acc#{K => V}
+        end, Encoders0, Defaults).
 
 escape_html(Data, Input, Skip) ->
     escape_html(Data, [], Input, Skip).
@@ -1686,129 +1696,65 @@ key(Int, Escape) when is_integer(Int) ->
     String = integer_to_binary(Int),
     Escape(String, String, 0).
 
-list([], _Escape) ->
+list([], _Escape, _Encoders) ->
     <<"[]">>;
-list([First | Tail], Escape) ->
-    [91, value(First, Escape) | list_loop(Tail, Escape)].
+list([First | Tail], Escape, Encoders) ->
+    [91, value(First, Escape,Encoders) | list_loop(Tail, Escape, Encoders)].
 
-list_loop([], _Escape) ->
+list_loop([], _Escape, _Encoders) ->
     [93];
-list_loop([First | Tail], Escape) ->
-    [44, value(First, Escape) | list_loop(Tail, Escape)].
+list_loop([First | Tail], Escape, Encoders) ->
+    [44, value(First, Escape, Encoders) | list_loop(Tail, Escape, Encoders)].
 
-map_naive([{Key, Value} | Tail], Escape) ->
+map_naive([{Key, Value} | Tail], Escape, Encoders) ->
     [<<"{\"">>,
      key(Key, Escape),
      <<"\":">>,
-     value(Value, Escape) |
-     map_naive_loop(Tail, Escape)].
+     value(Value, Escape, Encoders) |
+     map_naive_loop(Tail, Escape, Encoders)].
 
-map_naive_loop([], _Escape) ->
+map_naive_loop([], _Escape, _Encoders) ->
     [$}];
-map_naive_loop([{Key, Value} | Tail], Escape) ->
+map_naive_loop([{Key, Value} | Tail], Escape, Encoders) ->
     [<<",\"">>,
      key(Key, Escape),
      <<"\":">>,
-     value(Value, Escape) |
-     map_naive_loop(Tail, Escape)].
+     value(Value, Escape, Encoders) |
+     map_naive_loop(Tail, Escape, Encoders)].
 
 error_invalid_byte_error(Byte, Input) ->
     error({invalid_byte,
            <<"0x"/utf8,(integer_to_binary(Byte, 16))/binary>>,
            Input}).
 
-value(Value, Escape) when is_atom(Value) ->
+value(Value, Escape, _Encoders) when is_atom(Value) ->
     encode_atom(Value, Escape);
-value(Value, Escape) when is_binary(Value) ->
+value(Value, Escape, _Encoders) when is_binary(Value) ->
     encode_string(Value, Escape);
-value(Value, _Escape) when is_integer(Value) ->
+value(Value, _Escape, _Encoders) when is_integer(Value) ->
     integer(Value);
-value(Value, _Escape) when is_float(Value) ->
+value(Value, _Escape, _Encoders) when is_float(Value) ->
     float(Value);
-value([{_, _} | _] = Keyword, Escape) ->
-    map_naive(Keyword, Escape);
-value({Y, M, D}, Escape)
-    when is_integer(Y) andalso Y >= 0 andalso Y =< 9999 andalso
-         is_integer(M) andalso M >= 1 andalso M =< 12 andalso
-         is_integer(D) andalso D >= 1 andalso D =< 31 ->
-    DateTime = io_lib:format("~4..0b-~2..0b-~2..0b", [Y, M, D]),
-    encode_string(iolist_to_binary(DateTime), Escape);
-value({{Y, M, D}, {H, I, S}}, Escape)
-    when is_integer(Y) andalso Y >= 0 andalso Y =< 9999 andalso
-         is_integer(M) andalso M >= 1 andalso M =< 12 andalso
-         is_integer(D) andalso D >= 1 andalso D =< 31 andalso
-         is_integer(H) andalso H >= 0 andalso H =< 23 andalso
-         is_integer(I) andalso I >= 0 andalso I =< 59 andalso
-         is_integer(S) andalso S >= 0 andalso S =< 59 ->
-    Dt = io_lib:format("~4..0b-~2..0b-~2..0bT~2..0b:~2..0b:~sZ",
-                       [Y, M, D, H, I, integer_to_list(S)]),
-    encode_string(iolist_to_binary(Dt), Escape);
-value({{Y, M, D}, {H, I, S}}, Escape)
-    when is_integer(Y) andalso Y >= 0 andalso Y =< 9999 andalso
-         is_integer(M) andalso M >= 1 andalso M =< 12 andalso
-         is_integer(D) andalso D >= 1 andalso D =< 31 andalso
-         is_integer(H) andalso H >= 0 andalso H =< 23 andalso
-         is_integer(I) andalso I >= 0 andalso I =< 59 andalso
-         is_float(S) andalso S >= 0 andalso S < 60 ->
-    Dt = io_lib:format("~4..0b-~2..0b-~2..0bT~2..0b:~2..0b:~sZ",
-                       [Y, M, D, H, I, float_to_binary(S, [short])]),
-    encode_string(iolist_to_binary(Dt), Escape);
-value({O1, O2, O3, O4} = Ip, Escape)
-    when is_integer(O1) andalso O1 >= 0 andalso O1 =< 255 andalso
-         is_integer(O2) andalso O2 >= 0 andalso O2 =< 255 andalso
-         is_integer(O3) andalso O3 >= 0 andalso O3 =< 255 andalso
-         is_integer(O4) andalso O4 >= 0 andalso O4 =< 255 ->
-    Ipv4 = ip_to_binary_(Ip),
-    encode_string(Ipv4, Escape);
-value({{O1, O2, O3, O4} = Ip, Mask}, Escape)
-    when is_integer(O1) andalso O1 >= 0 andalso O1 =< 255 andalso
-         is_integer(O2) andalso O2 >= 0 andalso O2 =< 255 andalso
-         is_integer(O3) andalso O3 >= 0 andalso O3 =< 255 andalso
-         is_integer(O4) andalso O4 >= 0 andalso O4 =< 255 andalso
-         is_integer(Mask) andalso Mask >= 0 andalso Mask =< 32 ->
-    IpV4 = ip_to_binary_(Ip),
-    Cidr = <<IpV4/binary,
-             "/", (integer_to_binary(Mask))/binary>>,
-    encode_string(Cidr, Escape);
-value({O1, O2, O3, O4, O5, O6, O7, O8} = Ip, Escape)
-    when is_integer(O1) andalso O1 >= 0 andalso O1 =< 65535 andalso
-         is_integer(O2) andalso O2 >= 0 andalso O2 =< 65535 andalso
-         is_integer(O3) andalso O3 >= 0 andalso O3 =< 65535 andalso
-         is_integer(O4) andalso O4 >= 0 andalso O4 =< 65535 andalso
-         is_integer(O5) andalso O5 >= 0 andalso O5 =< 65535 andalso
-         is_integer(O6) andalso O6 >= 0 andalso O6 =< 65535 andalso
-         is_integer(O7) andalso O7 >= 0 andalso O7 =< 65535 andalso
-         is_integer(O8) andalso O8 >= 0 andalso O8 =< 65535 ->
-    IpV6 = ip_to_binary_(Ip),
-    encode_string(IpV6, Escape);
-value({{O1, O2, O3, O4, O5, O6, O7, O8} = Ip, Mask}, Escape)
-    when is_integer(O1) andalso O1 >= 0 andalso O1 =< 65535 andalso
-         is_integer(O2) andalso O2 >= 0 andalso O2 =< 65535 andalso
-         is_integer(O3) andalso O3 >= 0 andalso O3 =< 65535 andalso
-         is_integer(O4) andalso O4 >= 0 andalso O4 =< 65535 andalso
-         is_integer(O5) andalso O5 >= 0 andalso O5 =< 65535 andalso
-         is_integer(O6) andalso O6 >= 0 andalso O6 =< 65535 andalso
-         is_integer(O7) andalso O7 >= 0 andalso O7 =< 65535 andalso
-         is_integer(O8) andalso O8 >= 0 andalso O8 =< 65535 andalso
-         is_integer(Mask) andalso Mask >= 0 andalso Mask =< 64 ->
-    IpV6 = ip_to_binary_(Ip),
-    Cidr = <<IpV6/binary,
-             "/", (integer_to_binary(Mask))/binary>>,
-    encode_string(Cidr, Escape);
-value(Value, Escape) when is_list(Value) ->
-    list(Value, Escape);
-value(Value, Escape) when is_map(Value) ->
+value([{_, _} | _] = Keyword, Escape, Encoders) ->
+    map_naive(Keyword, Escape, Encoders);
+value({_Y, _M, _D} = Date, Escape, #{date := {Mod, Fun}}) ->
+    encode_string(Mod:Fun(Date), Escape);
+value({{_Y, _M, _D}, {_H, _I, _S}} = Datetime, Escape, #{datetime := {Mod, Fun}}) ->
+    encode_string(Mod:Fun(Datetime), Escape);
+value({_, _, _, _} = Ip, Escape, #{ip_cidr := {Mod, Fun}}) ->
+    encode_string(Mod:Fun(Ip), Escape);
+value({{_, _, _, _}, _Mask} = IpV4Cidr, Escape, #{ip_cidr := {Mod, Fun}}) ->
+    encode_string(Mod:Fun(IpV4Cidr), Escape);
+value({_, _, _, _, _, _, _, _} = IpV6, Escape, #{ip_cidr := {Mod, Fun}}) ->
+    encode_string(Mod:Fun(IpV6), Escape);
+value({{_, _, _, _, _, _, _, _}, _} = IpV6Cidr, Escape, #{ip_cidr := {Mod, Fun}}) ->
+    encode_string(Mod:Fun(IpV6Cidr), Escape);
+value(Value, Escape, Encoders) when is_list(Value) ->
+    list(Value, Escape, Encoders);
+value(Value, Escape, Encoders) when is_map(Value) ->
     case maps:to_list(Value) of
         [] ->
             <<"{}">>;
         Keyword ->
-            map_naive(Keyword, Escape)
-    end.
-
-ip_to_binary_(Ip) ->
-    case inet:ntoa(Ip) of
-        {error, einval} ->
-            error(invalid_ip);
-        IpStr ->
-            list_to_binary(IpStr)
+            map_naive(Keyword, Escape, Encoders)
     end.

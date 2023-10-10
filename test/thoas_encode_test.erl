@@ -129,7 +129,10 @@ types_test_() ->
         {#{<<"ipv6">> => {9735,64401,34956,5623,30910,49280,12263,4004}}, <<"{\"ipv6\":\"2607:fb91:888c:15f7:78be:c080:2fe7:fa4\"}">>},
         {#{<<"ipv6cidr">> => {{9735,64401,34956,5623,30910,49280,12263,4004}, 64}}, <<"{\"ipv6cidr\":\"2607:fb91:888c:15f7:78be:c080:2fe7:fa4/64\"}">>}
     ],
+    Encoders = #{date =>        {date_time, date},
+                 datetime =>    {date_time, datetime},
+                 ip_cidr =>     {ip_cidr, encode}},
     [
-        ?_assertEqual(Expected, iolist_to_binary(encode(Input, #{})))
+        ?_assertEqual(Expected, iolist_to_binary(encode(Input, #{encoders => Encoders})))
         || {Input, Expected} <- Cases
     ].

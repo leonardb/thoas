@@ -15,7 +15,8 @@
 }.
 
 -type encode_options() :: #{
-    escape => json | unicode | html | javascript
+    escape => json | unicode | html | javascript,
+    encoders => #{ atom() => {atom(), atom()} }
 }.
 
 -type json_term() :: 
